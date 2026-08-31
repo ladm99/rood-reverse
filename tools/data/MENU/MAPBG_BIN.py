@@ -1,56 +1,46 @@
-#!/usr/bin/env python3
 import argparse
-import logging
 from pathlib import Path
 
-from tools.etc.psx_img import encode_image, parse_cluts, read_png, write_png
+from PIL import Image
 
-logger = logging.getLogger(__name__)
-
-IMAGE_W = 320
-IMAGE_H = 240
+from tools.kaitai.parsers.data.MENU.mapbg_bin import MapbgBin
+from tools.libdata.img import decode_8bpp_bin, encode_rgb555
 
 
-def decode(infile: Path, outfile: Path) -> None:
-    raw    = infile.read_bytes()
-    pixels = raw[512:512 + IMAGE_W * IMAGE_H]
-
-    if len(pixels) < IMAGE_W * IMAGE_H:
-        raise ValueError(f"Input file does not contain enough image data for {IMAGE_W}x{IMAGE_H}")
-
-    cluts_before = parse_cluts(raw, 0, 1, 256)
-    outfile.parent.mkdir(parents=True, exist_ok=True)
-    write_png(outfile, pixels, IMAGE_W, IMAGE_H, 8, cluts_before, [])
+def decode_bin(input_path: Path, output_path: Path) -> None:
+    mapbg = MapbgBin.from_file(input_path)
+    decode_8bpp_bin(
+        mapbg.indices,
+        320, 240,
+        [(c.r8, c.g8, c.b8) for c in mapbg.clut.colors],
+        output_path
+    )
 
 
-def encode(infile: Path, outfile: Path) -> None:
-    pixels, width, height, bitdepth, cluts_before, cluts_after, _, _ = read_png(infile)
+def encode_bin(input_path: Path, output_path: Path) -> None:
+    img = Image.open(input_path)
+    img.load()
 
-    if (width, height) != (IMAGE_W, IMAGE_H):
-        raise ValueError(f"Expected {IMAGE_W}x{IMAGE_H} image, got {width}x{height}")
+    if img.mode != 'P':
+        raise ValueError(f'{input_path} must be paletted')
 
-    outfile.parent.mkdir(parents=True, exist_ok=True)
-    outfile.write_bytes(encode_image(pixels, cluts_before, cluts_after, bitdepth))
+    output_path.write_bytes(encode_rgb555(img.getpalette()) + img.tobytes())
 
 
-def main(argv=None):
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Decode or encode MAPBG.BIN")
-    parser.add_argument('command', choices=['decode', 'encode'])
-    parser.add_argument('input',   type=Path)
-    parser.add_argument('output',  type=Path)
-    parser.add_argument('--debug', action='store_true')
+    parser.add_argument('input', type=Path)
+    parser.add_argument('output', type=Path)
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO, format='%(message)s')
+    suffix = args.input.suffix.lower()
+    if suffix == '.bin':
+        decode_bin(args.input, args.output)
+    elif suffix == '.png':
+        encode_bin(args.input, args.output)
+    else:
+        parser.error(f"Could not infer mode from input file extension; expected .BIN or .png, got {suffix!r}")
 
-    try:
-        if args.command == 'decode':
-            decode(args.input, args.output)
-        else:
-            encode(args.input, args.output)
-    except Exception as e:
-        logger.error(str(e))
-        return 1
     return 0
 
 
